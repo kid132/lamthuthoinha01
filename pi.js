@@ -1,7 +1,7 @@
 /**
  * ==============================================================================
  * Shopee Live Pro Suite - Standalone All-in-One Multi-Room Lucky Draw & Live Tools
- * (Bản sạch 100% v2.1 - Tự động đồng bộ thời gian chuẩn, Lọc bỏ phòng cũ, Tối ưu Auto Spin)
+ * (Bản v2.2 - TỰ ĐỘNG BẬT SĂN XU KHI MỞ, Hiển thị kết quả rõ ràng, Báo trạng thái tức thì)
  * ==============================================================================
  */
 
@@ -55,7 +55,6 @@
     offsetMs: 0,
     synced: false,
     async sync() {
-      // 1. Thử đồng bộ qua Shopee Header (chính xác và đồng bộ nhất với server Shopee)
       try {
         const t0 = performance.now();
         const resp = await fetch('https://live.shopee.vn/api/v1/session/1', { method: 'HEAD', cache: 'no-cache' });
@@ -71,7 +70,6 @@
         }
       } catch (e) {}
 
-      // 2. Fallback: Đồng bộ qua TimeAPI UTC
       try {
         const t0 = performance.now();
         const resp = await fetch('https://timeapi.io/api/time/current/zone?timeZone=UTC', { cache: 'no-cache' });
@@ -203,7 +201,6 @@
       return null;
     },
 
-    // Quét danh sách TẤT CẢ các phòng live có Vòng Quay Xu trên toàn sàn
     async getMultiRoomLuckyDraws(mode = 'MIN', budget = 5700) {
       try {
         const payload = { type: 'get_luckydraw' };
@@ -228,7 +225,6 @@
       return [];
     },
 
-    // Theo dõi shop (Follow shop)
     async followShop(sessionId, shopId) {
       try {
         const resp = await fetch(`https://live.shopee.vn/api/v1/session/${sessionId}/follow/${shopId}`, {
@@ -241,7 +237,6 @@
       }
     },
 
-    // Bấm quay Vòng Quay May Mắn (Play)
     async playLuckyDraw(sessionId, drawId) {
       try {
         const resp = await fetch(`https://live.shopee.vn/api/v1/draw/session/${sessionId}/play`, {
@@ -256,7 +251,6 @@
       }
     },
 
-    // Nhận thưởng Vòng Quay (Claim)
     async claimLuckyDraw(sessionId, drawId) {
       try {
         const resp = await fetch(`https://live.shopee.vn/api/v1/draw/session/${sessionId}/claim`, {
@@ -271,7 +265,6 @@
       }
     },
 
-    // Lấy voucher trong live hiện tại
     async getSessionVouchers(sessionId) {
       try {
         const resp = await fetch(`https://live.shopee.vn/api/v1/session/${sessionId}/voucher_list`, {
@@ -284,7 +277,6 @@
       }
     },
 
-    // Lưu voucher vào ví
     async claimVoucher(voucherCode, promotionId = null, signature = '') {
       try {
         const resp = await fetch('https://shopee.vn/api/v2/voucher_wallet/save_voucher', {
@@ -313,7 +305,6 @@
       }
     },
 
-    // Lấy giỏ live
     async getLiveCartItems(sessionId, offset = 0, limit = 100) {
       try {
         const resp = await fetch(`https://live.shopee.vn/api/v1/session/${sessionId}/item_list?offset=${offset}&limit=${limit}`, {
@@ -331,9 +322,9 @@
   // 5. LUCKY DRAW ENGINE (QUÉT & SĂN ĐA PHÒNG)
   // ==========================================
   let luckyRooms = [];
-  let roomStatusMap = new Map(); // Lưu trạng thái kết quả của từng draw_id
+  let roomStatusMap = new Map();
   let blockedRooms = new Set();
-  let isLuckyRunning = false;
+  let isLuckyRunning = true; // 🌟 MẶC ĐỊNH TỰ ĐỘNG CHẠY NGAY KHI MỞ
   let luckyScanInterval = null;
   let luckyCountdownTimer = null;
   let luckyMode = 'MIN';
@@ -344,19 +335,14 @@
     const rawData = await ShopeeAPI.getMultiRoomLuckyDraws(luckyMode, luckyTargetBudget);
     const nowSec = Clock.nowSec();
 
-    // 🌟 QUAN TRỌNG: Lọc bỏ ngay các phòng ĐÃ HẾT HẠN (đã qua giờ) từ server 4anm
-    // Chỉ giữ các phòng có start_time >= nowSec - 2 (hoặc phòng đang có kết quả chờ xem)
     const validRooms = (rawData || []).filter(room => {
       const remainingSec = (room.start_time || 0) - nowSec;
       const cached = roomStatusMap.get(String(room.draw_id));
-      // Giữ lại nếu còn thời gian quay hoặc vừa hoàn thành trong phiên này
       return remainingSec >= -1 || (cached && cached.played);
     });
 
-    // 🌟 Sắp xếp tăng dần theo thời gian: Phòng sắp quay trước sẽ lên đầu danh sách!
     validRooms.sort((a, b) => (a.start_time || 0) - (b.start_time || 0));
 
-    // Khôi phục trạng thái kết quả đã lưu
     validRooms.forEach(room => {
       const cached = roomStatusMap.get(String(room.draw_id));
       if (cached) {
@@ -368,7 +354,6 @@
 
     luckyRooms = validRooms;
     renderLuckyTable();
-    Logger.info(`Đã cập nhật: ${luckyRooms.length} phòng live sắp mở Vòng quay xu.`);
   }
 
   function renderLuckyTable() {
@@ -376,14 +361,13 @@
     if (!tbody) return;
 
     const nowSec = Clock.nowSec();
-    // Lọc lại các phòng chưa kết thúc hoặc mới có kết quả
     const displayRooms = luckyRooms.filter(r => {
       const remainingSec = (r.start_time || 0) - nowSec;
-      return remainingSec >= -20 || r._result;
+      return remainingSec >= -45 || r._result;
     });
 
     if (displayRooms.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="3" style="text-align:center;padding:30px;color:#64748b;">Chưa có vòng quay nào sắp tới thỏa mãn điều kiện. Hãy thử chỉnh số xu hoặc hệ thống sẽ tự cập nhật sau vài giây...</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="3" style="text-align:center;padding:30px;color:#64748b;">Đang tìm kiếm các phòng livestream sắp có vòng quay xu...</td></tr>`;
       return;
     }
 
@@ -397,11 +381,14 @@
 
       let statusHtml = '';
       if (room._result) {
-        statusHtml = `<span style="font-weight:bold;color:${room._result.includes('xu') ? '#16a34a' : (room._result.includes('❌') ? '#dc2626' : '#2563eb')}">${room._result}</span>`;
+        const isWin = room._result.includes('xu');
+        const isErr = room._result.includes('❌') || room._result.includes('⚠️');
+        const color = isWin ? '#16a34a' : (isErr ? '#dc2626' : '#2563eb');
+        statusHtml = `<div style="font-weight:bold;font-size:13px;color:${color};padding:4px 0;">${room._result}</div>`;
       } else if (isBlocked) {
         statusHtml = `<span style="color:#ef4444;font-weight:bold;">🚫 Đã chặn</span> <button class="unblock-btn" data-draw="${room.draw_id}" style="border:none;background:none;cursor:pointer;color:#2563eb;text-decoration:underline;font-size:11px;">Bỏ</button>`;
       } else if (room._playing) {
-        statusHtml = `<span style="color:#ea580c;font-weight:bold;">⚡ Đang quay...</span>`;
+        statusHtml = `<div style="color:#ea580c;font-weight:bold;font-size:13px;animation:pulse 1s infinite;">⚡ Đang quay xu...</div>`;
       } else {
         statusHtml = `
           <div class="status-actions">
@@ -465,18 +452,14 @@
         const cdEl = document.getElementById(`cd-${room.draw_id}`);
         if (cdEl) cdEl.textContent = `${Math.max(0, remainingSec)}s`;
 
-        // 🌟 CHỈ KÍCH HOẠT KHI:
-        // 1. Đang bật chế độ chạy (isLuckyRunning)
-        // 2. Thời gian còn lại chạm mốc bắt đầu spam (ví dụ <= 3s)
-        // 3. VÀ thời gian còn lại PHẢI >= 0 (chưa quá hạn!)
-        // 4. Phòng này CHƯA TỪNG ĐƯỢC CHƠI (room._played = false)
-        if (isLuckyRunning && remainingSec <= luckyPreStartTime && remainingSec >= -1 && !room._played) {
+        // 🌟 KHI ĐẾN MỐC THỜI GIAN QUAY (<= luckyPreStartTime):
+        if (isLuckyRunning && remainingSec <= luckyPreStartTime && remainingSec >= -2 && !room._played) {
           room._playing = true;
           room._played = true;
           roomStatusMap.set(String(room.draw_id), { played: true, playing: true, result: null });
 
           const stEl = document.getElementById(`st-${room.draw_id}`);
-          if (stEl) stEl.innerHTML = `<span style="color:#ea580c;font-weight:bold;">⚡ Đang quay...</span>`;
+          if (stEl) stEl.innerHTML = `<div style="color:#ea580c;font-weight:bold;font-size:13px;">⚡ Đang quay xu...</div>`;
 
           executeLuckyDrawPlay(room);
         }
@@ -485,8 +468,8 @@
   }
 
   async function executeLuckyDrawPlay(room) {
-    const shopName = room.nickname || room.username || room.session_id;
-    Logger.info(`[Auto Spin] Chuẩn bị vào quay tại shop ${shopName} (#${room.draw_id})...`);
+    const shopName = room.nickname || room.username || `Shop #${room.session_id}`;
+    Logger.info(`[Vòng Quay] Bắt đầu quay tại ${shopName} (Draw #${room.draw_id})...`);
     
     // 1. Follow shop nếu có shop_id
     if (room.shop_id) {
@@ -497,26 +480,28 @@
       // 2. Gửi lệnh Play
       const playRes = await ShopeeAPI.playLuckyDraw(room.session_id, room.draw_id);
 
-      // Phân tích mã lỗi từ Shopee
       if (playRes?.err_code || playRes?.error) {
         const errCode = playRes.err_code || playRes.error;
         const errMsg = playRes.err_msg || playRes.msg || '';
 
         if (errCode === 7917029 || errMsg.includes('fully claim')) {
-          room._result = '❌ Hết xu';
-          Logger.warn(`[Auto Spin] Shop ${shopName}: Đã hết lượt nhận xu vòng này.`);
+          room._result = '❌ Hết lượt xu';
+          Logger.warn(`[Vòng Quay] ${shopName}: Đã hết lượt xu giải thưởng.`);
         } else if (errCode === 7917006 || errMsg.includes('not live')) {
-          room._result = '❌ Đã đóng';
-          Logger.warn(`[Auto Spin] Shop ${shopName}: Phiên live hoặc vòng quay đã kết thúc.`);
+          room._result = '❌ Đã đóng live';
+          Logger.warn(`[Vòng Quay] ${shopName}: Vòng quay đã đóng.`);
         } else if (errCode === 7917015) {
-          room._result = '❌ Đạt giới hạn';
-          Logger.warn(`[Auto Spin] Đã đạt giới hạn trúng thưởng tối đa trong ngày (10 lần).`);
+          room._result = '❌ Đạt tối đa 10 lần';
+          Logger.warn(`[Vòng Quay] Bạn đã đạt giới hạn trúng thưởng tối đa 10 lần trong ngày.`);
+        } else if (errCode === 7917001 || errMsg.includes('login')) {
+          room._result = '⚠️ Chưa đăng nhập';
+          Logger.error(`[Vòng Quay] Bạn cần đăng nhập tài khoản Shopee trên trình duyệt để quay xu!`);
         } else {
-          room._result = `❌ Lỗi (${errCode})`;
-          Logger.warn(`[Auto Spin] Shop ${shopName} báo lỗi: ${errMsg || errCode}`);
+          room._result = `❌ Không trúng (${errCode})`;
+          Logger.warn(`[Vòng Quay] ${shopName}: ${errMsg || `Lỗi mã ${errCode}`}`);
         }
       } else {
-        // 3. Nếu Play thành công, gửi lệnh Claim
+        // 3. Claim nhận quà
         const claimRes = await ShopeeAPI.claimLuckyDraw(room.session_id, room.draw_id);
         
         let rewardText = '✅ Đã tham gia';
@@ -524,27 +509,30 @@
         const prizeName = claimRes?.data?.prize_name || playRes?.data?.prize_name;
 
         if (coinWon) {
-          rewardText = `💸 ${coinWon} xu`;
-          Logger.success(`🎉 TRÚNG THƯỞNG: ${coinWon} XU tại shop ${shopName}!`);
+          rewardText = `🎉 ${coinWon} xu`;
+          Logger.success(`🎉 CHÚC MỪNG: Trúng ${coinWon} XU tại ${shopName}!`);
         } else if (prizeName) {
           rewardText = `🎁 ${prizeName}`;
-          Logger.success(`🎉 TRÚNG QUÀ: ${prizeName} tại shop ${shopName}!`);
+          Logger.success(`🎉 CHÚC MỪNG: Trúng ${prizeName} tại ${shopName}!`);
         } else {
-          Logger.info(`[Auto Spin] Đã quay xong tại shop ${shopName}.`);
+          Logger.info(`[Vòng Quay] Đã tham gia vòng quay tại ${shopName}.`);
         }
 
         room._result = rewardText;
       }
     } catch (e) {
       room._result = '❌ Lỗi mạng';
-      Logger.error(`[Auto Spin] Lỗi kết nối shop ${shopName}: ${e.message}`);
+      Logger.error(`[Vòng Quay] Lỗi kết nối: ${e.message}`);
     } finally {
       room._playing = false;
       roomStatusMap.set(String(room.draw_id), { played: true, playing: false, result: room._result });
 
       const stEl = document.getElementById(`st-${room.draw_id}`);
       if (stEl) {
-        stEl.innerHTML = `<span style="font-weight:bold;color:${room._result.includes('xu') ? '#16a34a' : (room._result.includes('❌') ? '#dc2626' : '#2563eb')}">${room._result}</span>`;
+        const isWin = room._result.includes('xu');
+        const isErr = room._result.includes('❌') || room._result.includes('⚠️');
+        const color = isWin ? '#16a34a' : (isErr ? '#dc2626' : '#2563eb');
+        stEl.innerHTML = `<div style="font-weight:bold;font-size:13px;color:${color};padding:4px 0;">${room._result}</div>`;
       }
     }
   }
@@ -561,7 +549,7 @@
       }
       if (stText) stText.innerHTML = 'Trạng thái: <span style="color:#ef4444;">🔴 Đã dừng</span>';
       if (luckyScanInterval) clearInterval(luckyScanInterval);
-      Logger.info('Vòng quay: Đã dừng tự động.');
+      Logger.info('Vòng quay: Đã tạm dừng.');
     } else {
       isLuckyRunning = true;
       if (btn) {
@@ -569,16 +557,14 @@
         btn.className = 'btn danger';
       }
       if (stText) stText.innerHTML = 'Trạng thái: <span style="color:#16a34a;">🟢 Đang chạy</span>';
-      Logger.info(`🚀 Bắt đầu tự động săn vòng quay (${luckyMode}: ${luckyTargetBudget} xu, Bắt đầu: ${luckyPreStartTime}s trước)...`);
+      Logger.info(`🚀 Bắt đầu săn vòng quay (${luckyMode}: ${luckyTargetBudget} xu, Bắt đầu: ${luckyPreStartTime}s trước)...`);
 
-      // Quét ngay lập tức
       fetchAndRenderLuckyRooms();
 
-      // Định kỳ quét làm mới mỗi 18 giây để luôn đón các phòng live mới nhất
       if (luckyScanInterval) clearInterval(luckyScanInterval);
       luckyScanInterval = setInterval(() => {
         if (isLuckyRunning) fetchAndRenderLuckyRooms();
-      }, 18000);
+      }, 15000);
     }
   }
 
@@ -1047,12 +1033,13 @@
               <label>Bắt đầu (s):</label>
               <input id="startTimeInput" class="toolbar-input" value="3" placeholder="3">
             </div>
-            <button id="btnToggleRun" class="btn primary">🚀 Bắt đầu</button>
+            <!-- Mặc định trạng thái là Đang chạy và nút bấm là Dừng -->
+            <button id="btnToggleRun" class="btn danger">🟦 Dừng</button>
             <button id="btnPiP" class="btn secondary">📺 PiP</button>
           </div>
 
           <div class="lucky-status-bar">
-            <div id="lucky-status-text">Trạng thái: <span style="color:#ef4444;">🔴 Đã dừng</span></div>
+            <div id="lucky-status-text">Trạng thái: <span style="color:#16a34a;">🟢 Đang tự động săn xu</span></div>
             <div style="font-size:12px;color:#64748b;">(Tự động quay & nhận xu khi đến giờ)</div>
           </div>
 
@@ -1278,5 +1265,11 @@
     fetchAndRenderLuckyRooms();
   });
 
-  Logger.info('✨ Shopee Live Pro Suite v2.1 đã sẵn sàng! Bấm [🚀 Bắt đầu] để tự động săn xu.');
+  // Tự động quét cập nhật liên tục mỗi 15 giây
+  if (luckyScanInterval) clearInterval(luckyScanInterval);
+  luckyScanInterval = setInterval(() => {
+    if (isLuckyRunning) fetchAndRenderLuckyRooms();
+  }, 15000);
+
+  Logger.info('✨ Shopee Live Pro Hunter v2.2 đã kích hoạt! Đang TỰ ĐỘNG săn xu tất cả các phòng live.');
 })();
