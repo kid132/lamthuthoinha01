@@ -15,11 +15,13 @@
 (function () {
   'use strict';
 
-  if (document.getElementById('shopee-live-tools-shell')) {
-    const existing = document.getElementById('shopee-live-tools-shell');
-    existing.style.display = existing.style.display === 'none' ? 'flex' : 'none';
-    return;
+  // Dọn dẹp phiên bản cũ nếu đang chạy để nạp mới hoàn toàn
+  const existingShell = document.getElementById('shopee-live-tools-shell');
+  if (existingShell) {
+    existingShell.remove();
   }
+  if (window._slpLuckyTimer) { clearInterval(window._slpLuckyTimer); window._slpLuckyTimer = null; }
+  if (window._slpScanTimer) { clearInterval(window._slpScanTimer); window._slpScanTimer = null; }
 
   // ==========================================
   // 1. CẤU HÌNH & TRẠNG THÁI (STATE & SETTINGS)
@@ -514,7 +516,7 @@
   function startLuckyTimer() {
     if (luckyCountdownTimer) clearInterval(luckyCountdownTimer);
 
-    luckyCountdownTimer = setInterval(async () => {
+    window._slpLuckyTimer = window._slpLuckyTimer = luckyCountdownTimer = setInterval(async () => {
       const nowSec = Clock.nowSec();
 
       // Kiểm tra nếu đã đạt giới hạn thì dừng
@@ -746,7 +748,7 @@
       fetchAndRenderLuckyRooms();
 
       if (luckyScanInterval) clearInterval(luckyScanInterval);
-      luckyScanInterval = setInterval(() => {
+      window._slpScanTimer = window._slpScanTimer = luckyScanInterval = setInterval(() => {
         if (isLuckyRunning && !isMaxLimitReached) fetchAndRenderLuckyRooms();
       }, 15000);
     }
@@ -1458,7 +1460,7 @@
   });
 
   if (luckyScanInterval) clearInterval(luckyScanInterval);
-  luckyScanInterval = setInterval(() => {
+  window._slpScanTimer = window._slpScanTimer = luckyScanInterval = setInterval(() => {
     if (isLuckyRunning && !isMaxLimitReached) fetchAndRenderLuckyRooms();
   }, 15000);
 
