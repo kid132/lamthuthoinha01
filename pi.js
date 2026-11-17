@@ -1,7 +1,7 @@
 /**
  * ==============================================================================
  * Shopee Live Pro Suite - Standalone All-in-One Multi-Room Lucky Draw & Live Tools
- * (Bản v2.3 - TỰ ĐỘNG NGỪNG QUAY KHI ĐẠT TỐI ĐA LƯỢT LẤY GIẢI HÔM NAY)
+ * (Bản v2.4 - SĂN XU TỐC ĐỘ CAO 100ms - Tự động quay chuẩn từng mili-giây, Tự ngừng khi đạt tối đa giải)
  * 
  * Tính năng nổi bật v2.3:
  * 1. 🛑 Tự động phát hiện khi đạt tối đa lượt trúng giải trong ngày (mã lỗi Shopee hoặc đạt mốc cài đặt)
@@ -526,112 +526,198 @@
       }
 
       for (const room of luckyRooms) {
-        if (room._result || room._playing || room._played || blockedRooms.has(String(room.draw_id))) continue;
+        if (room._result || blockedRooms.has(String(room.draw_id))) continue;
 
         const remainingSec = (room.start_time || 0) - nowSec;
         const cdEl = document.getElementById(`cd-${room.draw_id}`);
-        if (cdEl) cdEl.textContent = `${Math.max(0, remainingSec)}s`;
+        if (cdEl && !room._playing) {
+          cdEl.textContent = `${Math.max(0, remainingSec)}s`;
+        }
 
-        if (isLuckyRunning && !isMaxLimitReached && remainingSec <= luckyPreStartTime && remainingSec >= -2 && !room._played) {
+        if (isLuckyRunning && !isMaxLimitReached && remainingSec <= luckyPreStartTime && remainingSec >= -15 && !room._played && !room._playing) {
           room._playing = true;
           room._played = true;
           roomStatusMap.set(String(room.draw_id), { played: true, playing: true, result: null });
 
           const stEl = document.getElementById(`st-${room.draw_id}`);
-          if (stEl) stEl.innerHTML = `<div style="color:#ea580c;font-weight:bold;font-size:13px;">⚡ Đang quay xu...</div>`;
+          if (stEl) stEl.innerHTML = `<div style="color:#ea580c;font-weight:bold;font-size:13px;">⚡ Đang săn xu...</div>`;
 
           executeLuckyDrawPlay(room);
         }
       }
-    }, 1000);
+    }, 500);
+  }
+
+  function finalizeRoomResult(room) {
+    room._playing = false;
+    roomStatusMap.set(String(room.draw_id), { played: true, playing: false, result: room._result });
+
+    const stEl = document.getElementById(`st-${room.draw_id}`);
+    if (stEl) {
+      const isWin = room._result.includes('xu') || room._result.includes('trúng') || room._result.includes('🎉') || room._result.includes('🎁');
+      const isErr = room._result.includes('❌') || room._result.includes('⚠️') || room._result.includes('🛑') || room._result.includes('🚫');
+      const color = isWin ? '#16a34a' : (isErr ? '#dc2626' : '#2563eb');
+      stEl.innerHTML = `<div style="font-weight:bold;font-size:13px;color:${color};padding:4px 0;">${room._result}</div>`;
+    }
   }
 
   async function executeLuckyDrawPlay(room) {
     const shopName = room.nickname || room.username || `Shop #${room.session_id}`;
-    Logger.info(`[Vòng Quay] Bắt đầu quay tại ${shopName} (Draw #${room.draw_id})...`);
+    Logger.info(`[Vòng Quay] Chuẩn bị săn xu tại ${shopName} (Draw #${room.draw_id})...`);
     
     if (room.shop_id) {
       ShopeeAPI.followShop(room.session_id, room.shop_id).catch(() => {});
     }
 
-    try {
-      const playRes = await ShopeeAPI.playLuckyDraw(room.session_id, room.draw_id);
+    const stEl = document.getElementById(`st-${room.draw_id}`);
+    if (stEl) stEl.innerHTML = `<div style="color:#ea580c;font-weight:bold;font-size:13px;">⚡ Đang săn xu...</div>`;
 
-      if (playRes?.err_code || playRes?.error) {
-        const errCode = playRes.err_code || playRes.error;
-        const errMsg = playRes.err_msg || playRes.msg || '';
+    let finished = false;
+    const startTimeMs = Date.now();
+    const timeoutMs = 15000; // Tối đa 15s chờ vòng quay mở
 
-        // 🛑 PHÁT HIỆN LỖI ĐẠT GIỚI HẠN TỐI ĐA TỪ SHOPEE:
-        if (errCode === 7917015 || errMsg.includes('limit') || errMsg.includes('max') || errMsg.includes('đạt giới hạn')) {
-          room._result = '🛑 Đạt tối đa lượt trúng';
-          stopDueToMaxLimit('Shopee báo bạn đã đạt tối đa số lượt lấy giải trong ngày (Mã 7917015)');
+    return new Promise((resolve) => {
+      const pollInterval = setInterval(async () => {
+        if (finished || isMaxLimitReached || !isLuckyRunning) {
+          clearInterval(pollInterval);
+          resolve();
           return;
         }
 
-        if (errCode === 7917029 || errMsg.includes('fully claim')) {
-          room._result = '❌ Hết lượt xu';
-          Logger.warn(`[Vòng Quay] ${shopName}: Đã hết lượt xu giải thưởng.`);
-        } else if (errCode === 7917006 || errMsg.includes('not live')) {
-          room._result = '❌ Đã đóng live';
-          Logger.warn(`[Vòng Quay] ${shopName}: Vòng quay đã đóng.`);
-        } else if (errCode === 7917001 || errMsg.includes('login')) {
-          room._result = '⚠️ Chưa đăng nhập';
-          Logger.error(`[Vòng Quay] Bạn cần đăng nhập tài khoản Shopee trên trình duyệt để quay xu!`);
-        } else {
-          room._result = `❌ Không trúng (${errCode})`;
-          Logger.warn(`[Vòng Quay] ${shopName}: ${errMsg || `Lỗi mã ${errCode}`}`);
-        }
-      } else {
-        const claimRes = await ShopeeAPI.claimLuckyDraw(room.session_id, room.draw_id);
-        
-        let rewardText = '✅ Đã tham gia';
-        const coinWon = claimRes?.data?.coin_count || playRes?.data?.coin_count;
-        const prizeName = claimRes?.data?.prize_name || playRes?.data?.prize_name;
-
-        if (coinWon) {
-          rewardText = `🎉 ${coinWon} xu`;
-          const currentWins = incrementDailyWins();
-          Logger.success(`🎉 CHÚC MỪNG: Trúng ${coinWon} XU tại ${shopName}! (Lượt trúng #${currentWins})`);
-
-          // Kiểm tra xem đã đạt tối đa chưa
-          const maxWins = Number(settings.maxDailyWins) || 10;
-          if (currentWins >= maxWins) {
-            room._result = rewardText;
-            stopDueToMaxLimit(`Bạn đã trúng đủ ${currentWins}/${maxWins} giải hôm nay`);
-            return;
-          }
-        } else if (prizeName) {
-          rewardText = `🎁 ${prizeName}`;
-          const currentWins = incrementDailyWins();
-          Logger.success(`🎉 CHÚC MỪNG: Trúng ${prizeName} tại ${shopName}! (Lượt trúng #${currentWins})`);
-
-          const maxWins = Number(settings.maxDailyWins) || 10;
-          if (currentWins >= maxWins) {
-            room._result = rewardText;
-            stopDueToMaxLimit(`Bạn đã trúng đủ ${currentWins}/${maxWins} giải hôm nay`);
-            return;
-          }
-        } else {
-          Logger.info(`[Vòng Quay] Đã tham gia vòng quay tại ${shopName}.`);
+        // Quá thời gian 15s sau khi mở mà Shopee vẫn chưa mở vòng quay
+        if (Date.now() - startTimeMs > timeoutMs) {
+          clearInterval(pollInterval);
+          finished = true;
+          room._result = '🛑 Đã kết thúc';
+          Logger.warn(`[Vòng Quay] ${shopName}: Quá thời gian chờ vòng quay mở.`);
+          finalizeRoomResult(room);
+          resolve();
+          return;
         }
 
-        room._result = rewardText;
-      }
-    } catch (e) {
-      room._result = '❌ Lỗi mạng';
-      Logger.error(`[Vòng Quay] Lỗi kết nối: ${e.message}`);
-    } finally {
-      room._playing = false;
-      roomStatusMap.set(String(room.draw_id), { played: true, playing: false, result: room._result });
+        try {
+          const playRes = await ShopeeAPI.playLuckyDraw(room.session_id, room.draw_id);
 
-      const stEl = document.getElementById(`st-${room.draw_id}`);
-      if (stEl) {
-        const isWin = room._result.includes('xu');
-        const isErr = room._result.includes('❌') || room._result.includes('⚠️') || room._result.includes('🛑');
-        const color = isWin ? '#16a34a' : (isErr ? '#dc2626' : '#2563eb');
-        stEl.innerHTML = `<div style="font-weight:bold;font-size:13px;color:${color};padding:4px 0;">${room._result}</div>`;
-      }
-    }
+          if (playRes?.err_code === 0) {
+            // 🎉 TRÚNG THƯỞNG THÀNH CÔNG!
+            clearInterval(pollInterval);
+            finished = true;
+
+            const prizeAmount = playRes?.data?.prize?.amount || playRes?.data?.coin_count || playRes?.data?.draw_result?.coin_count;
+            const prizeName = playRes?.data?.prize?.name || playRes?.data?.prize_name;
+            const rewardCoins = parseInt(prizeAmount, 10);
+
+            let rewardText = '🎉 Trúng xu';
+            if (!isNaN(rewardCoins) && rewardCoins > 0) {
+              rewardText = `🎉 ${rewardCoins} xu`;
+              const currentWins = incrementDailyWins();
+              Logger.success(`🎉 CHÚC MỪNG: Trúng ${rewardCoins} XU tại ${shopName}! (Lượt trúng #${currentWins})`);
+            } else if (prizeName) {
+              rewardText = `🎁 ${prizeName}`;
+              const currentWins = incrementDailyWins();
+              Logger.success(`🎉 CHÚC MỪNG: Trúng ${prizeName} tại ${shopName}! (Lượt trúng #${currentWins})`);
+            } else {
+              rewardText = '🎉 Trúng thưởng';
+              incrementDailyWins();
+              Logger.success(`🎉 CHÚC MỪNG: Nhận xu thành công tại ${shopName}!`);
+            }
+
+            room._result = rewardText;
+
+            // Kiểm tra giới hạn từ play_info của Shopee
+            const playInfo = playRes?.data?.play_info;
+            if (playInfo && playInfo.daily_play_times >= playInfo.daily_play_limit) {
+              stopDueToMaxLimit(`Shopee báo bạn đã đạt tối đa số lượt lấy giải trong ngày (${playInfo.daily_play_times}/${playInfo.daily_play_limit})`);
+            } else {
+              const maxWins = Number(settings.maxDailyWins) || 10;
+              const currentWins = getDailyWinsCount();
+              if (currentWins >= maxWins) {
+                stopDueToMaxLimit(`Bạn đã trúng đủ ${currentWins}/${maxWins} giải hôm nay`);
+              }
+            }
+
+            finalizeRoomResult(room);
+            resolve();
+            return;
+          }
+
+          const errCode = playRes?.err_code || playRes?.error;
+          const errMsg = playRes?.err_msg || playRes?.msg || '';
+
+          // 🛑 1. ĐẠT TỐI ĐA LƯỢT TRÚNG GIẢI TRONG NGÀY (Mã 7917030 hoặc 7917015 hoặc 7917025)
+          if (errCode === 7917030 || errCode === 7917015 || errCode === 7917025 || errMsg.includes('limit') || errMsg.includes('max') || errMsg.includes('đạt giới hạn')) {
+            clearInterval(pollInterval);
+            finished = true;
+            room._result = '🚫 Đạt tối đa lượt ngày';
+            stopDueToMaxLimit('Shopee báo bạn đã đạt tối đa số lượt lấy giải trong ngày (Mã ' + errCode + ')');
+            finalizeRoomResult(room);
+            resolve();
+            return;
+          }
+
+          // ⏳ 2. VÒNG QUAY CHƯA MỞ (Chưa tới giây mở của Shopee) -> TIẾP TỤC CHỜ & THỬ LẠI!
+          if (errCode === 7917006 || errMsg.includes('not live') || errMsg.includes('not start')) {
+            // Shopee chưa mở vòng quay: tiếp tục gửi mỗi 100ms
+            return;
+          }
+
+          // 🛑 3. HẾT LƯỢT XU / HẾT GIẢI THƯỞNG
+          if (errCode === 7917029 || errMsg.includes('fully claim')) {
+            clearInterval(pollInterval);
+            finished = true;
+            room._result = '🛑 Hết giải';
+            Logger.warn(`[Vòng Quay] ${shopName}: Đã hết lượt xu giải thưởng.`);
+            finalizeRoomResult(room);
+            resolve();
+            return;
+          }
+
+          // ⚠️ 4. CHƯA ĐĂNG NHẬP
+          if (errCode === 7917001 || errMsg.includes('login')) {
+            clearInterval(pollInterval);
+            finished = true;
+            room._result = '⚠️ Chưa đăng nhập';
+            Logger.error(`[Vòng Quay] Bạn cần đăng nhập tài khoản Shopee trên trình duyệt để quay xu!`);
+            finalizeRoomResult(room);
+            resolve();
+            return;
+          }
+
+          // 🛑 5. CÁC MÃ LỖI TERMINAL KHÁC
+          if (errCode === 7917003) {
+            clearInterval(pollInterval);
+            finished = true;
+            room._result = '🛑 Không khả dụng';
+            Logger.warn(`[Vòng Quay] ${shopName}: Vòng quay không khả dụng.`);
+            finalizeRoomResult(room);
+            resolve();
+            return;
+          }
+
+          if (errCode === 7917038) {
+            clearInterval(pollInterval);
+            finished = true;
+            room._result = '🛑 Đã kết thúc';
+            Logger.warn(`[Vòng Quay] ${shopName}: Vòng quay đã kết thúc.`);
+            finalizeRoomResult(room);
+            resolve();
+            return;
+          }
+
+          if (errCode) {
+            clearInterval(pollInterval);
+            finished = true;
+            room._result = `❌ Lỗi (${errCode})`;
+            Logger.warn(`[Vòng Quay] ${shopName}: ${errMsg || `Lỗi mã ${errCode}`}`);
+            finalizeRoomResult(room);
+            resolve();
+            return;
+          }
+        } catch (e) {
+          // Bỏ qua lỗi mạng chập chờn trong 1 nhịp poll để thử lại ở nhịp kế tiếp
+        }
+      }, 100);
+    });
   }
 
   function toggleLuckyRunning() {
@@ -1376,5 +1462,5 @@
     if (isLuckyRunning && !isMaxLimitReached) fetchAndRenderLuckyRooms();
   }, 15000);
 
-  Logger.info(`✨ Shopee Live Pro Hunter v2.3 đã kích hoạt! Giới hạn hôm nay: ${settings.maxDailyWins} giải.`);
+  Logger.info(`✨ Shopee Live Pro Hunter v2.4 (Fast-Poll 100ms) đã kích hoạt! Giới hạn hôm nay: ${settings.maxDailyWins} giải.`);
 })();
